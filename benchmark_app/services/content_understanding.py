@@ -11,6 +11,7 @@ from azure.ai.contentunderstanding import ContentUnderstandingClient
 from config import (
     CU_ENDPOINT,
     GPT4_ENDPOINT, GPT4_KEY,
+    AZURE_OPENAI_KEY,
 )
 
 
@@ -35,10 +36,12 @@ class ContentUnderstandingService:
 
     # ── GPT-4.1 LLM summary (text-based) ─────────────────────────────
     def _gpt4_describe(self, filename: str, extracted_text: str,
-                       system_prompt: str = None, user_prompt: str = None) -> str:
-        """Send extracted document text to GPT-4.1 for a structured summary."""
-        if not GPT4_ENDPOINT:
-            return "(GPT-4.1 summary skipped — GPT4_ENDPOINT not configured)"
+                       system_prompt: str = None, user_prompt: str = None,
+                       gpt_endpoint: str = None) -> str:
+        """Send extracted document text to GPT for a structured summary."""
+        endpoint = gpt_endpoint or GPT4_ENDPOINT
+        if not endpoint:
+            return "(GPT summary skipped — no endpoint configured)"
 
         sys_content = system_prompt or (
             "You are an expert document analysis assistant. "
@@ -62,19 +65,21 @@ class ContentUnderstandingService:
             "temperature": 0.3,
         }
         headers = {"Content-Type": "application/json"}
-        if GPT4_KEY:
-            headers["api-key"] = GPT4_KEY
+        key = GPT4_KEY or AZURE_OPENAI_KEY
+        if key:
+            headers["api-key"] = key
         else:
             headers["Authorization"] = f"Bearer {self._get_bearer_token()}"
-        r = requests.post(GPT4_ENDPOINT, headers=headers, json=body, timeout=120)
+        r = requests.post(endpoint, headers=headers, json=body, timeout=120)
         if not r.ok:
-            raise RuntimeError(f"GPT-4.1 HTTP {r.status_code}: {r.text[:500]}")
+            raise RuntimeError(f"GPT HTTP {r.status_code}: {r.text[:500]}")
         return r.json()["choices"][0]["message"]["content"].strip()
 
     # ── Public API ──────────────────────────────────────────────────────
     def analyze(self, file_bytes: bytes, filename: str, analyzer_id: str,
                 mime: str = "image/jpeg",
-                system_prompt: str = None, user_prompt: str = None) -> dict:
+                system_prompt: str = None, user_prompt: str = None,
+                gpt_endpoint: str = None) -> dict:
         """
         Full pipeline: SDK begin_analyze_binary → poll → parse → GPT-4 summary.
         """
@@ -90,24 +95,34 @@ class ContentUnderstandingService:
 
             # Parse SDK result into our format
             contents = result.get("contents", [])
-            block = contents[0] if contents else {}
-            fields_raw = block.get("fields", {})
-            md = block.get("markdown", "")
+            # Collect markdown from ALL content blocks (multi-page docs)
+            all_md_parts = []
+            fields_raw = {}
+            tables_count = 0
+            for block in contents:
+                block_md = block.get("markdown", "")
+                if block_md:
+                    all_md_parts.append(block_md)
+                block_fields = block.get("fields", {})
+                fields_raw.update(block_fields)
+                tables_count += len(block.get("tables", []))
+            md = "\n\n".join(all_md_parts)
 
             flat = self._extract_field_values(fields_raw)
             confs = []
             self._collect_confidences(fields_raw, confs)
             avg_conf = round(sum(confs) / len(confs), 4) if confs else None
 
-            # GPT-4.1 LLM summary
+            # GPT LLM summary
             gpt_description = ""
             gpt_errors = []
             try:
                 gpt_description = self._gpt4_describe(
                     filename, md, system_prompt, user_prompt,
+                    gpt_endpoint=gpt_endpoint,
                 )
             except Exception as e:
-                gpt_errors.append(f"GPT-4.1 Summary: {e}")
+                gpt_errors.append(f"GPT Summary: {e}")
 
             dt = round(time.time() - t0, 2)
             return {
@@ -117,10 +132,11 @@ class ContentUnderstandingService:
                 "fields": flat,
                 "field_count": len(fields_raw),
                 "fields_with_values": len(flat),
-                "tables_count": len(block.get("tables", [])),
+                "tables_count": tables_count,
                 "avg_confidence": avg_conf,
                 "gpt_description": gpt_description,
                 "errors": gpt_errors if gpt_errors else None,
+                "raw_result": result,
             }
         except Exception as e:
             return {

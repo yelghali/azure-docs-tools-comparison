@@ -16,6 +16,7 @@ from config import (
     DOC_INTEL_KEY,
     GPT_ENDPOINT,
     GPT_KEY,
+    AZURE_OPENAI_KEY,
 )
 
 
@@ -48,9 +49,11 @@ class DocIntelGPTService:
 
     # ── GPT-4.1 text-based call ──────────────────────────────────────
     def _gpt_describe(self, filename: str, extracted_text: str,
-                      system_prompt: str = None, user_prompt: str = None) -> str:
-        if not GPT_ENDPOINT:
-            return "(GPT-4.1 description skipped — GPT_ENDPOINT not configured)"
+                      system_prompt: str = None, user_prompt: str = None,
+                      gpt_endpoint: str = None) -> str:
+        endpoint = gpt_endpoint or GPT_ENDPOINT
+        if not endpoint:
+            return "(GPT description skipped — no endpoint configured)"
 
         sys_content = system_prompt or (
             "You are an expert document analysis assistant. "
@@ -74,13 +77,14 @@ class DocIntelGPTService:
             "temperature": 0.3,
         }
         headers = {"Content-Type": "application/json"}
-        if GPT_KEY:
-            headers["api-key"] = GPT_KEY
+        key = GPT_KEY or AZURE_OPENAI_KEY
+        if key:
+            headers["api-key"] = key
         else:
             headers["Authorization"] = f"Bearer {self._get_bearer_token()}"
-        r = requests.post(GPT_ENDPOINT, headers=headers, json=body, timeout=180)
+        r = requests.post(endpoint, headers=headers, json=body, timeout=180)
         if not r.ok:
-            raise RuntimeError(f"GPT-4.1 HTTP {r.status_code}: {r.text[:500]}")
+            raise RuntimeError(f"GPT HTTP {r.status_code}: {r.text[:500]}")
         return r.json()["choices"][0]["message"]["content"].strip()
 
     # ── Public API ──────────────────────────────────────────────────────
@@ -88,9 +92,10 @@ class DocIntelGPTService:
         self,
         file_bytes: bytes,
         filename: str,
-        model_id: str = "prebuilt-invoice",
+        model_id: str = "prebuilt-layout",
         mime: str = "image/jpeg",
         prompts: dict = None,
+        gpt_endpoint: str = None,
     ) -> dict:
         """
         Run Doc Intelligence + GPT Vision on a document.
@@ -154,19 +159,27 @@ class DocIntelGPTService:
             }
         except Exception as e:
             errors.append(f"DocIntel: {e}")
+            result = None
 
-        # ── Step 2: GPT-4.1 Summary ─────────────────────────────────────
+        # ── Step 2: GPT Summary ──────────────────────────────────────────
         gpt_description = ""
         try:
             gpt_description = self._gpt_describe(
                 filename, di_markdown,
                 system_prompt=prompts.get("gpt_system"),
                 user_prompt=prompts.get("gpt_user"),
+                gpt_endpoint=gpt_endpoint,
             )
         except Exception as e:
             errors.append(f"GPT-4.1: {e}")
 
         dt = round(time.time() - t0, 2)
+
+        # Build serializable raw result
+        raw_result = None
+        if result is not None:
+            raw_result = self._serialize_di_result(result)
+
         return {
             "status": "success" if not errors else "partial",
             "time_seconds": dt,
@@ -179,4 +192,52 @@ class DocIntelGPTService:
             "gpt_description": gpt_description,
             "errors": errors if errors else None,
             "di_detail": di_result,
+            "raw_result": raw_result,
         }
+
+    @staticmethod
+    def _serialize_di_result(result) -> dict:
+        """Convert Doc Intelligence SDK result to a JSON-serializable dict."""
+        out = {}
+        if result.content:
+            out["content_length"] = len(result.content)
+        if result.pages:
+            out["pages"] = []
+            for p in result.pages:
+                page = {"page_number": p.page_number, "width": p.width, "height": p.height, "unit": p.unit}
+                if p.words:
+                    page["words_count"] = len(p.words)
+                if p.lines:
+                    page["lines"] = [
+                        {"content": ln.content, "polygon": ln.polygon} for ln in p.lines
+                    ]
+                if p.selection_marks:
+                    page["selection_marks_count"] = len(p.selection_marks)
+                out["pages"].append(page)
+        if result.paragraphs:
+            out["paragraphs"] = [
+                {"role": pg.role, "content": pg.content, "polygon": pg.bounding_regions[0].polygon if pg.bounding_regions else None}
+                for pg in result.paragraphs
+            ]
+        if result.tables:
+            out["tables"] = []
+            for tbl in result.tables:
+                out["tables"].append({
+                    "row_count": tbl.row_count,
+                    "column_count": tbl.column_count,
+                    "cells": [
+                        {"row": c.row_index, "col": c.column_index, "content": c.content, "kind": c.kind}
+                        for c in (tbl.cells or [])
+                    ],
+                })
+        if result.figures:
+            out["figures"] = [
+                {"caption": fig.caption.content if fig.caption else None}
+                for fig in result.figures
+            ]
+        if result.styles:
+            out["styles"] = [
+                {"is_handwritten": s.is_handwritten, "confidence": s.confidence}
+                for s in result.styles
+            ]
+        return out

@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ── Make sure our package is importable ────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import PREBUILT_ANALYZERS, SUPPORTED_EXTENSIONS, CU_ENDPOINT
+from config import PREBUILT_ANALYZERS, SUPPORTED_EXTENSIONS, CU_ENDPOINT, GPT_MODELS, get_gpt_endpoint
 from utils.comparison import (
     build_comparison_table,
     build_field_comparison,
@@ -86,7 +86,15 @@ with st.sidebar:
     if not selected_models:
         st.warning("Select at least one model.")
 
-    st.subheader("2️⃣  Pipelines to Run")
+    st.subheader("2️⃣  LLM Model")
+    selected_llm = st.selectbox(
+        "GPT model for summaries",
+        options=list(GPT_MODELS.keys()),
+        format_func=lambda x: GPT_MODELS[x],
+        help="Used by CU and DocIntel pipelines for the text summary step.",
+    )
+
+    st.subheader("3️⃣  Pipelines to Run")
     # Check if Content Understanding is available (requires endpoint)
     cu_available = bool(CU_ENDPOINT)
     run_cu = st.checkbox(
@@ -98,11 +106,11 @@ with st.sidebar:
     if not cu_available:
         st.caption("⚠️ Content Understanding requires CU endpoint")
     
-    run_di = st.checkbox("🟢 Document Intelligence + GPT-4.1 (Argus)", value=True)
+    run_di = st.checkbox(f"🟢 Document Intelligence + {GPT_MODELS.get(selected_llm, selected_llm)}", value=True)
     run_mi = st.checkbox("🟠 Mistral Document AI", value=True)
 
     st.divider()
-    st.subheader("3️⃣  LLM Prompts")
+    st.subheader("4️⃣  LLM Prompts")
     st.caption("Edit prompts below ↓ (in the main area)")
 
     st.divider()
@@ -332,6 +340,8 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
         results = {}
         futures = {}
         multi_model = len(selected_models) > 1
+        gpt_endpoint = get_gpt_endpoint(selected_llm)
+        llm_label = GPT_MODELS.get(selected_llm, selected_llm)
         with ThreadPoolExecutor(max_workers=6) as executor:
             for model_id in selected_models:
                 short_label = model_id.replace("prebuilt-", "").capitalize()
@@ -340,14 +350,16 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                     svc = get_cu_service()
                     futures[
                         executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
-                                        prompts["cu_system"], prompts["cu_user"])
+                                        prompts["cu_system"], prompts["cu_user"],
+                                        gpt_endpoint)
                     ] = f"🔵 Content Understanding{suffix}"
                 if run_di:
                     svc = get_di_service()
                     futures[
                         executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
-                                        {"gpt_system": prompts["gpt_system"], "gpt_user": prompts["gpt_user"]})
-                    ] = f"🟢 DocIntel + GPT-4.1{suffix}"
+                                        {"gpt_system": prompts["gpt_system"], "gpt_user": prompts["gpt_user"]},
+                                        gpt_endpoint)
+                    ] = f"🟢 DocIntel + {llm_label}{suffix}"
             if run_mi:
                 svc = get_mi_service()
                 futures[
@@ -445,6 +457,12 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                     with st.expander(f"📋 Extracted fields ({len(fields)})", expanded=False):
                         st.json(fields)
 
+                # Raw API result (paragraphs, polygons, tables, etc.)
+                raw = res.get("raw_result")
+                if raw:
+                    with st.expander("🔬 Raw API Result (paragraphs, polygons, tables…)", expanded=False):
+                        st.json(raw)
+
                 # Errors / warnings
                 errs = res.get("errors")
                 if errs:
@@ -491,7 +509,14 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
 
     # ── Download results ────────────────────────────────────────────────
     st.divider()
-    results_json = json.dumps(all_doc_results, indent=2, ensure_ascii=False, default=str)
+    # Strip raw_result from download (too large) but keep everything else
+    download_data = []
+    for doc in all_doc_results:
+        clean_results = {}
+        for pname, res in doc["results"].items():
+            clean_results[pname] = {k: v for k, v in res.items() if k != "raw_result"}
+        download_data.append({"filename": doc["filename"], "results": clean_results})
+    results_json = json.dumps(download_data, indent=2, ensure_ascii=False, default=str)
     st.download_button(
         "📥 Download Full Results (JSON)",
         data=results_json,

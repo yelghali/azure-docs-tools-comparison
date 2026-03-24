@@ -147,6 +147,7 @@ class MistralVisionService:
 
         try:
             raw = self._call_ocr(file_bytes, mime)
+            raw_result = raw  # Keep full OCR response for raw display
 
             # Parse pages from response
             raw_pages = raw.get("pages") or raw.get("data", {}).get("pages", [])
@@ -171,6 +172,7 @@ class MistralVisionService:
 
         except Exception as e:
             errors.append(f"Mistral Document AI OCR: {e}")
+            raw_result = None
 
         dt = round(time.time() - t0, 2)
         error_str = "; ".join(errors) if errors else None
@@ -187,6 +189,7 @@ class MistralVisionService:
             "mistral_description": description,
             "error": error_str,
             "errors": errors if errors else None,
+            "raw_result": raw_result,
         }
 
     # ── Parsing helpers ─────────────────────────────────────────────────
