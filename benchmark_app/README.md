@@ -8,12 +8,12 @@ Compare **Azure Content Understanding**, **Document Intelligence + GPT**, and **
 cd benchmark_app
 pip install -r requirements.txt
 az login                           # DefaultAzureCredential is used for Azure services
-streamlit run app.py
+streamlit run app.py               # opens at http://localhost:8501
 ```
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in your endpoints:
+Create a `.env` file in the project root with your endpoints:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -22,29 +22,37 @@ Copy `.env.example` to `.env` and fill in your endpoints:
 | `DOC_INTELLIGENCE_KEY` | For DI | Document Intelligence API key |
 | `AZURE_OPENAI_BASE` | Yes | Azure OpenAI base URL (e.g. `https://my-resource.openai.azure.com`) |
 | `AZURE_OPENAI_KEY` | Optional | API key (falls back to `DefaultAzureCredential`) |
+| `AZURE_OPENAI_API_VERSION` | Optional | API version (default: `2024-10-21`) |
 | `MISTRAL_DOC_AI_ENDPOINT` | For Mistral | Mistral OCR endpoint (Azure APIM) |
 | `MISTRAL_DOC_AI_KEY` | For Mistral | Mistral API key |
 | `MISTRAL_DOC_AI_MODEL` | For Mistral | Model name (default: `mistral-document-ai-2505`) |
 
 ## How to Use
 
-1. **Select models** — pick `layout`, `read`, or both in the sidebar
-2. **Choose LLM** — select GPT-4.1 or GPT-5.1 for the text summary step
-3. **Enable pipelines** — check which services to compare (CU, Doc Intelligence, Mistral)
-4. **Upload documents** — drag & drop files or paste URLs
-5. **Run benchmark** — click 🚀 and wait for parallel execution
-6. **Compare results** — view metrics, field comparisons, rendered markdown, and raw API results (paragraphs, polygons, tables)
+1. **Sidebar → Prebuilt Model(s)** — pick `Layout`, `Read`, or both. CU and Doc Intelligence run each selected model separately so you can compare them.
+2. **Sidebar → LLM Model** — choose GPT-4.1 or GPT-5.1 for the structured text summary step.
+3. **Sidebar → Pipelines** — check which services to benchmark (🔵 CU, 🟢 Doc Intelligence + GPT, 🟠 Mistral). All checked pipelines run **in parallel**.
+4. **Upload or paste URLs** — use the "Upload Files" tab (drag & drop, multi-file) or the "Enter URLs" tab.
+5. **Customize prompts** *(optional)* — expand "📝 Customize Analysis Prompts" in the main area to edit the system and user prompts sent to GPT.
+6. **Click 🚀 Run Benchmark** — progress bar shows per-document status.
+7. **Review results** — for each document and pipeline you get:
+   - ⏱ Timing & confidence metrics
+   - 📝 LLM-generated description
+   - 📄 Extracted markdown (raw + rendered tabs)
+   - 📋 Extracted fields (expandable JSON)
+   - 🔬 Raw API result (full response with paragraphs, polygons, tables)
+8. **Download** — click "📥 Download All Results (JSON)" at the bottom for a single JSON export.
 
-When multiple prebuilt models are selected, CU and Doc Intelligence run with **each model** so you can compare read vs layout side-by-side. Mistral uses its own OCR model regardless.
+> **Tip:** Mistral uses its own OCR model regardless of prebuilt model selection.
 
 ## Architecture
 
 ```
-Upload → ┌── Azure Content Understanding (SDK, prebuilt analyzer) + GPT summary
-         ├── Azure Document Intelligence (SDK) + GPT summary
-         └── Mistral Document AI (REST OCR via Azure APIM)
-              ↓
-         Side-by-side comparison, metrics, markdown preview & raw API results
+Upload / URL → ┌── Azure Content Understanding (SDK) ──→ GPT summary
+               ├── Azure Document Intelligence (SDK) ──→ GPT summary
+               └── Mistral Document AI (REST OCR via Azure APIM)
+                    ↓
+               Side-by-side comparison, metrics, markdown preview & raw API output
 ```
 
 ## Project Structure
