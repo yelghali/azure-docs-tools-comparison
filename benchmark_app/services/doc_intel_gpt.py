@@ -73,9 +73,13 @@ class DocIntelGPTService:
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": user_content},
             ],
-            "max_tokens": 2000,
             "temperature": 0.3,
         }
+        # GPT-5.x uses max_completion_tokens; GPT-4.x uses max_tokens
+        if "gpt-5" in endpoint or "gpt-4o" in endpoint:
+            body["max_completion_tokens"] = 2000
+        else:
+            body["max_tokens"] = 2000
         headers = {"Content-Type": "application/json"}
         key = GPT_KEY or AZURE_OPENAI_KEY
         if key:

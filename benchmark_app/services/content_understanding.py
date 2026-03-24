@@ -62,9 +62,13 @@ class ContentUnderstandingService:
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": user_content},
             ],
-            "max_tokens": 2000,
             "temperature": 0.3,
         }
+        # GPT-5.x uses max_completion_tokens; GPT-4.x uses max_tokens
+        if "gpt-5" in endpoint or "gpt-4o" in endpoint:
+            body["max_completion_tokens"] = 2000
+        else:
+            body["max_tokens"] = 2000
         headers = {"Content-Type": "application/json"}
         key = GPT4_KEY or AZURE_OPENAI_KEY
         if key:
@@ -210,11 +214,16 @@ class ContentUnderstandingService:
     @staticmethod
     def _to_serializable(obj):
         """Convert SDK result to a plain JSON-serializable dict."""
-        if hasattr(obj, "as_dict"):
-            return obj.as_dict()
+        # Try SDK's built-in serialization first
+        if hasattr(obj, 'as_dict'):
+            try:
+                return json.loads(json.dumps(obj.as_dict(), default=str))
+            except Exception:
+                pass
+        # Fallback: force through JSON round-trip
         try:
             return json.loads(json.dumps(obj, default=str))
-        except (TypeError, ValueError):
-            return {"_raw_str": str(obj)}
+        except Exception:
+            return {"_raw": str(obj)[:5000]}
         except (TypeError, ValueError):
             return str(obj)

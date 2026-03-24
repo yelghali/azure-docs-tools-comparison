@@ -461,7 +461,10 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                 raw = res.get("raw_result")
                 if raw:
                     with st.expander("🔬 Raw API Result (paragraphs, polygons, tables…)", expanded=False):
-                        st.json(raw)
+                        try:
+                            st.json(raw)
+                        except Exception:
+                            st.code(json.dumps(raw, indent=2, default=str)[:10000], language="json")
 
                 # Errors / warnings
                 errs = res.get("errors")
