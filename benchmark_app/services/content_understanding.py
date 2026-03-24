@@ -5,6 +5,7 @@ After extraction, sends extracted text to GPT-4.1 for a structured LLM summary.
 """
 
 import time
+import json
 import requests
 from azure.identity import DefaultAzureCredential
 from azure.ai.contentunderstanding import ContentUnderstandingClient
@@ -136,7 +137,7 @@ class ContentUnderstandingService:
                 "avg_confidence": avg_conf,
                 "gpt_description": gpt_description,
                 "errors": gpt_errors if gpt_errors else None,
-                "raw_result": result,
+                "raw_result": self._to_serializable(result),
             }
         except Exception as e:
             return {
@@ -205,3 +206,22 @@ class ContentUnderstandingService:
         elif isinstance(obj, list):
             for x in obj:
                 ContentUnderstandingService._collect_confidences(x, confs)
+
+    @staticmethod
+    def _to_serializable(obj):
+        """Deep-convert SDK result objects to plain JSON-serializable dicts/lists."""
+        if isinstance(obj, dict):
+            return {k: ContentUnderstandingService._to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ContentUnderstandingService._to_serializable(v) for v in obj]
+        if hasattr(obj, "items"):
+            # dict-like SDK object
+            return {k: ContentUnderstandingService._to_serializable(v) for k, v in obj.items()}
+        if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+            return [ContentUnderstandingService._to_serializable(v) for v in obj]
+        # Try JSON round-trip for remaining SDK types
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, ValueError):
+            return str(obj)
