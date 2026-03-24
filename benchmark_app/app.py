@@ -1,7 +1,7 @@
 """
 🏁 Document Processing Benchmark — Streamlit App
 
-Compare Azure Content Understanding vs Document Intelligence + GPT vs Mistral AI
+Compare Azure Content Understanding vs Document Intelligence + GPT (Argus) vs Mistral AI
 on your own documents. Upload, pick a model, and get side-by-side results.
 """
 
@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import time
+import requests
 import streamlit as st
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,12 +17,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ── Make sure our package is importable ────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import PREBUILT_ANALYZERS, SUPPORTED_EXTENSIONS
+from config import PREBUILT_ANALYZERS, SUPPORTED_EXTENSIONS, CU_ENDPOINT
 from utils.comparison import (
     build_comparison_table,
     build_field_comparison,
     compute_summary_stats,
     get_mime_type,
+)
+from prompts import (
+    GPT_SYSTEM_PROMPT, GPT_USER_PROMPT,
+    MISTRAL_SYSTEM_PROMPT, MISTRAL_USER_PROMPT,
+    CU_GPT_SYSTEM_PROMPT, CU_GPT_USER_PROMPT,
 )
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -68,26 +74,111 @@ with st.sidebar:
     )
     st.title("⚙️ Settings")
 
-    st.subheader("1️⃣  Prebuilt Model")
-    analyzer_id = st.selectbox(
-        "Content Understanding analyzer",
+    st.subheader("1️⃣  Prebuilt Model(s)")
+    selected_models = st.multiselect(
+        "Analyzer models",
         options=list(PREBUILT_ANALYZERS.keys()),
+        default=["prebuilt-layout"],
         format_func=lambda x: PREBUILT_ANALYZERS[x],
-        help="This model is used by **Azure Content Understanding** and **Document Intelligence**.",
+        help="Select one or more models. CU and Doc Intelligence "
+             "will run with each. Mistral uses its own OCR model.",
     )
+    if not selected_models:
+        st.warning("Select at least one model.")
 
     st.subheader("2️⃣  Pipelines to Run")
-    run_cu = st.checkbox("🔵 Azure Content Understanding", value=True)
-    run_di = st.checkbox("🟢 Document Intelligence + GPT-5", value=True)
-    run_mi = st.checkbox("🟠 Mistral Doc AI (OCR)", value=True)
+    # Check if Content Understanding is available (requires endpoint)
+    cu_available = bool(CU_ENDPOINT)
+    run_cu = st.checkbox(
+        "🔵 Azure Content Understanding", 
+        value=cu_available,
+        disabled=not cu_available,
+        help="Requires Azure CU endpoint configuration" if not cu_available else None,
+    )
+    if not cu_available:
+        st.caption("⚠️ Content Understanding requires CU endpoint")
+    
+    run_di = st.checkbox("🟢 Document Intelligence + GPT-4.1 (Argus)", value=True)
+    run_mi = st.checkbox("🟠 Mistral Document AI", value=True)
+
+    st.divider()
+    st.subheader("3️⃣  LLM Prompts")
+    st.caption("Edit prompts below ↓ (in the main area)")
 
     st.divider()
     st.caption(
-        "All three pipelines run **in parallel** for maximum speed. "
+        "Selected pipelines run **in parallel** for maximum speed. "
         "Results are compared side-by-side."
     )
     st.divider()
     st.caption("Built for the Azure Content Understanding benchmark project.")
+
+# ── Prompt Customization Section (main area — full width) ───────────────
+with st.expander("📝 Customize Analysis Prompts", expanded=False):
+    st.caption("Edit prompts to customize how LLMs analyze your documents. Use `{filename}` as placeholder for the document name.")
+    
+    prompt_col1, prompt_col2, prompt_col3 = st.columns(3)
+    
+    with prompt_col1:
+        st.markdown("**🟢 GPT-4.1 (Argus) Prompts:**")
+        gpt_system = st.text_area(
+            "System prompt",
+            value=GPT_SYSTEM_PROMPT,
+            height=200,
+            key="gpt_system",
+            help="Instructions that define how the AI should behave"
+        )
+        gpt_user = st.text_area(
+            "User prompt",
+            value=GPT_USER_PROMPT,
+            height=250,
+            key="gpt_user",
+            help="The actual analysis request. Use {filename} for document name"
+        )
+    
+    with prompt_col2:
+        st.markdown("**🟠 Mistral Document AI Prompts:**")
+        mistral_system = st.text_area(
+            "System prompt",
+            value=MISTRAL_SYSTEM_PROMPT,
+            height=200,
+            key="mistral_system",
+            help="Instructions for Mistral OCR and analysis"
+        )
+        mistral_user = st.text_area(
+            "User prompt",
+            value=MISTRAL_USER_PROMPT,
+            height=250,
+            key="mistral_user",
+            help="The analysis request. Use {filename} for document name"
+        )
+    
+    with prompt_col3:
+        st.markdown("**🔵 Content Understanding GPT Prompts:**")
+        cu_system = st.text_area(
+            "System prompt",
+            value=CU_GPT_SYSTEM_PROMPT,
+            height=200,
+            key="cu_system",
+            help="Instructions for Content Understanding's GPT summary"
+        )
+        cu_user = st.text_area(
+            "User prompt",
+            value=CU_GPT_USER_PROMPT,
+            height=250,
+            key="cu_user",
+            help="Summary request. Use {filename} for document name"
+        )
+
+# Store prompts in session state for access during benchmark
+prompts = {
+    "gpt_system": st.session_state.get("gpt_system", GPT_SYSTEM_PROMPT),
+    "gpt_user": st.session_state.get("gpt_user", GPT_USER_PROMPT),
+    "mistral_system": st.session_state.get("mistral_system", MISTRAL_SYSTEM_PROMPT),
+    "mistral_user": st.session_state.get("mistral_user", MISTRAL_USER_PROMPT),
+    "cu_system": st.session_state.get("cu_system", CU_GPT_SYSTEM_PROMPT),
+    "cu_user": st.session_state.get("cu_user", CU_GPT_USER_PROMPT),
+}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Lazy-load services (cached so they're only initialized once)
@@ -115,35 +206,93 @@ def get_mi_service():
 # ═══════════════════════════════════════════════════════════════════════
 st.title("📄 Document Processing Benchmark")
 st.markdown(
-    "Compare **Azure Content Understanding**, **Document Intelligence + GPT-5**, "
-    "and **Mistral Doc AI** on your documents — all at once."
+    "Compare **Azure Content Understanding**, **Document Intelligence + GPT-4.1 (Argus)**, "
+    "and **Mistral Document AI** on your documents — all at once."
 )
 
 # ═══════════════════════════════════════════════════════════════════════
-# File Upload
+# Helper function to download images from URLs
 # ═══════════════════════════════════════════════════════════════════════
-uploaded_files = st.file_uploader(
-    "📂  Upload one or more documents",
-    type=[e.lstrip(".") for e in SUPPORTED_EXTENSIONS],
-    accept_multiple_files=True,
-    help="Supported: JPG, PNG, BMP, TIFF, PDF",
-)
+def download_image_from_url(url: str) -> tuple[bytes, str]:
+    """Download an image from a URL and return (bytes, filename)."""
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    # Extract filename from URL
+    filename = url.split("/")[-1].split("?")[0]
+    if not filename or "." not in filename:
+        filename = "document.jpg"
+    return response.content, filename
 
-if not uploaded_files:
-    st.info("👆 Upload documents to get started.")
+# ═══════════════════════════════════════════════════════════════════════
+# File Upload + URL Input
+# ═══════════════════════════════════════════════════════════════════════
+input_tab1, input_tab2 = st.tabs(["📂 Upload Files", "🔗 Enter URLs"])
+
+with input_tab1:
+    uploaded_files = st.file_uploader(
+        "Upload one or more documents",
+        type=[e.lstrip(".") for e in SUPPORTED_EXTENSIONS],
+        accept_multiple_files=True,
+        help="Supported: JPG, PNG, BMP, TIFF, PDF",
+    )
+
+with input_tab2:
+    url_input = st.text_area(
+        "Enter document URLs (one per line)",
+        placeholder="https://example.com/document1.jpg\nhttps://example.com/document2.png",
+        help="Enter URLs of images/documents to process",
+    )
+    
+# Combine uploaded files and URL downloads
+documents = []
+
+if uploaded_files:
+    for f in uploaded_files:
+        documents.append({
+            "name": f.name,
+            "bytes": f.getvalue(),
+            "type": f.type,
+            "source": "upload"
+        })
+
+if url_input:
+    urls = [u.strip() for u in url_input.strip().split("\n") if u.strip()]
+    if urls:
+        with st.spinner(f"Downloading {len(urls)} document(s) from URLs..."):
+            for url in urls:
+                try:
+                    file_bytes, filename = download_image_from_url(url)
+                    documents.append({
+                        "name": filename,
+                        "bytes": file_bytes,
+                        "type": get_mime_type(filename),
+                        "source": "url",
+                        "url": url
+                    })
+                except Exception as e:
+                    st.error(f"Failed to download {url}: {e}")
+
+if not documents:
+    st.info("👆 Upload documents or enter URLs to get started.")
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════
-# Preview uploaded docs
+# Preview documents
 # ═══════════════════════════════════════════════════════════════════════
-with st.expander(f"📎 Uploaded documents ({len(uploaded_files)})", expanded=False):
-    cols = st.columns(min(len(uploaded_files), 5))
-    for idx, f in enumerate(uploaded_files):
+with st.expander(f"📎 Documents to process ({len(documents)})", expanded=False):
+    cols = st.columns(min(len(documents), 5))
+    for idx, doc in enumerate(documents):
         with cols[idx % len(cols)]:
-            if f.type and f.type.startswith("image"):
-                st.image(f, caption=f.name, use_container_width=True)
+            mime_type = doc.get("type", "")
+            if mime_type and mime_type.startswith("image"):
+                try:
+                    st.image(doc["bytes"], caption=doc["name"])
+                except Exception:
+                    st.write(f"🖼️ {doc['name']} ({len(doc['bytes']) / 1024:.0f} KB)")
             else:
-                st.write(f"📄 {f.name} ({f.size / 1024:.0f} KB)")
+                st.write(f"📄 {doc['name']} ({len(doc['bytes']) / 1024:.0f} KB)")
+            if doc.get("source") == "url":
+                st.caption("From URL")
 
 # ═══════════════════════════════════════════════════════════════════════
 # 🚀 Run Benchmark
@@ -152,14 +301,17 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
     if not any([run_cu, run_di, run_mi]):
         st.error("Please select at least one pipeline in the sidebar.")
         st.stop()
+    if not selected_models and (run_cu or run_di):
+        st.error("Please select at least one prebuilt model in the sidebar.")
+        st.stop()
 
     all_doc_results = []
     progress = st.progress(0, text="Starting benchmark…")
-    total_tasks = len(uploaded_files)
+    total_tasks = len(documents)
 
-    for file_idx, uploaded_file in enumerate(uploaded_files):
-        file_bytes = uploaded_file.getvalue()
-        filename = uploaded_file.name
+    for file_idx, doc in enumerate(documents):
+        file_bytes = doc["bytes"]
+        filename = doc["name"]
         mime = get_mime_type(filename)
 
         st.divider()
@@ -169,29 +321,39 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
         preview_col, results_col = st.columns([1, 3])
         with preview_col:
             if mime.startswith("image"):
-                st.image(file_bytes, caption=filename, use_container_width=True)
+                try:
+                    st.image(file_bytes, caption=filename)
+                except Exception:
+                    st.write(f"🖼️ {filename} ({len(file_bytes) / 1024:.0f} KB)")
             else:
                 st.write(f"📄 {filename} ({len(file_bytes) / 1024:.0f} KB)")
 
         # ── Run pipelines in parallel ───────────────────────────────────
         results = {}
         futures = {}
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            if run_cu:
-                svc = get_cu_service()
-                futures[
-                    executor.submit(svc.analyze, file_bytes, filename, analyzer_id, mime)
-                ] = "🔵 Content Understanding"
-            if run_di:
-                svc = get_di_service()
-                futures[
-                    executor.submit(svc.analyze, file_bytes, filename, analyzer_id, mime)
-                ] = "🟢 DocIntel + GPT-5"
+        multi_model = len(selected_models) > 1
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            for model_id in selected_models:
+                short_label = model_id.replace("prebuilt-", "").capitalize()
+                suffix = f" [{short_label}]" if multi_model else ""
+                if run_cu:
+                    svc = get_cu_service()
+                    futures[
+                        executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
+                                        prompts["cu_system"], prompts["cu_user"])
+                    ] = f"🔵 Content Understanding{suffix}"
+                if run_di:
+                    svc = get_di_service()
+                    futures[
+                        executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
+                                        {"gpt_system": prompts["gpt_system"], "gpt_user": prompts["gpt_user"]})
+                    ] = f"🟢 DocIntel + GPT-4.1{suffix}"
             if run_mi:
                 svc = get_mi_service()
                 futures[
-                    executor.submit(svc.analyze, file_bytes, filename, mime)
-                ] = "🟠 Mistral Doc AI"
+                    executor.submit(svc.analyze, file_bytes, filename, mime,
+                                    {"mistral_system": prompts["mistral_system"], "mistral_user": prompts["mistral_user"]})
+                ] = "🟠 Mistral Document AI"
 
             with results_col:
                 status_placeholder = st.empty()
@@ -254,7 +416,11 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
         for tab, (pname, res) in zip(tabs, results.items()):
             with tab:
                 if res.get("status") == "error":
-                    st.error(f"❌ Error: {res.get('error', 'Unknown error')}")
+                    # Check both 'error' (singular) and 'errors' (list) keys
+                    err_msg = res.get("error")
+                    if not err_msg and res.get("errors"):
+                        err_msg = "; ".join(res["errors"])
+                    st.error(f"❌ Error: {err_msg or 'Unknown error'}")
                     continue
 
                 # GPT / Mistral description
@@ -266,8 +432,12 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                 # Markdown output
                 md = res.get("markdown", "")
                 if md:
-                    with st.expander("📄 Markdown output", expanded=False):
-                        st.code(md[:3000], language="markdown")
+                    with st.expander("📄 Markdown output", expanded=True):
+                        raw_tab, rendered_tab = st.tabs(["📝 Raw Markdown", "👁️ Rendered Preview"])
+                        with raw_tab:
+                            st.code(md[:5000], language="markdown")
+                        with rendered_tab:
+                            st.markdown(md[:5000])
 
                 # Raw fields
                 fields = res.get("fields", {})

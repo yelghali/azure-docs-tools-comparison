@@ -1,99 +1,63 @@
-# 📄 Document Processing Benchmark — Streamlit App
+# 📄 Document Processing Benchmark
 
-Compare **Azure Content Understanding**, **Document Intelligence + GPT-5**, and **Mistral Doc AI (OCR)** on your own documents — all at once, side by side.
+Compare **Azure Content Understanding**, **Document Intelligence + GPT-4.1**, and **Mistral Document AI** side-by-side on your documents.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.36+-red)
-![Azure](https://img.shields.io/badge/Azure-Content%20Understanding-0078D4)
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|---------|-------------|
-| 📂 **Multi-doc upload** | Upload one or many documents (JPG, PNG, PDF, TIFF, BMP) |
-| 🧾 **Prebuilt model picker** | Choose `prebuilt-invoice`, `prebuilt-layout`, or `prebuilt-read` |
-| ⚡ **Parallel execution** | All 3 pipelines run simultaneously via thread pool |
-| 📊 **Side-by-side comparison** | Metrics cards, comparison table, field-by-field diff |
-| 📈 **Batch summary** | Aggregate stats & timing chart when processing multiple docs |
-| 📥 **Export results** | Download full JSON results for further analysis |
-
-## 🏗️ Architecture
-
-```
-Upload → ┌─── Azure Content Understanding (prebuilt analyzer)
-         ├─── Azure Doc Intelligence + GPT-5-chat Vision
-         └─── Mistral Doc AI (Azure-hosted OCR)
-              ↓
-         Side-by-side comparison & metrics
-```
-
-## 🚀 Quick Start
-
-### 1. Install dependencies
+## Quick Start
 
 ```bash
 cd benchmark_app
 pip install -r requirements.txt
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-# Edit .env with your actual keys and endpoints
-```
-
-You need:
-- **Azure Content Understanding** endpoint (with DefaultAzureCredential access)
-- **Azure Blob Storage** account (for Content Understanding URL-based input)
-- **Azure Document Intelligence** endpoint + key
-- **Azure OpenAI** endpoint + key (with a GPT-5-chat deployment)
-- **Mistral Doc AI** key (Azure-hosted Mistral OCR)
-
-### 3. Run the app
-
-```bash
+az login                           # DefaultAzureCredential is used for Azure services
 streamlit run app.py
 ```
 
-### 4. Use the app
+## Configuration
 
-1. Pick a **prebuilt model** in the sidebar
-2. Select which **pipelines** to run
-3. **Upload** your documents
-4. Click **🚀 Run Benchmark**
-5. Explore the results!
+Copy `.env.example` to `.env` and fill in your endpoints:
 
-## 📁 Project Structure
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_CU_ENDPOINT` | For CU | Content Understanding endpoint |
+| `DOC_INTELLIGENCE_ENDPOINT` | For DI | Document Intelligence endpoint |
+| `DOC_INTELLIGENCE_KEY` | For DI | Document Intelligence API key |
+| `GPT_ENDPOINT` | Yes | GPT-4.1 chat completions URL (full URL with deployment + api-version) |
+| `GPT_KEY` | Optional | GPT API key (falls back to `DefaultAzureCredential`) |
+| `MISTRAL_DOC_AI_ENDPOINT` | For Mistral | Mistral OCR endpoint (Azure APIM) |
+| `MISTRAL_DOC_AI_KEY` | For Mistral | Mistral API key |
+| `MISTRAL_DOC_AI_MODEL` | For Mistral | Model name (default: `mistral-document-ai-2505`) |
+
+## How to Use
+
+1. **Select models** — pick one or more prebuilt models (`invoice`, `layout`, `read`) in the sidebar
+2. **Enable pipelines** — check which services to compare (CU, Doc Intelligence, Mistral)
+3. **Upload documents** — drag & drop files or paste URLs
+4. **Run benchmark** — click 🚀 and wait for parallel execution
+5. **Compare results** — view metrics, field comparisons, and rendered markdown previews
+
+When multiple models are selected, CU and Doc Intelligence run with **each model** so you can compare read vs layout side-by-side. Mistral uses its own OCR model regardless.
+
+## Architecture
+
+```
+Upload → ┌── Azure Content Understanding (SDK, prebuilt analyzer)
+         ├── Azure Document Intelligence + GPT-4.1 (text extraction → LLM)
+         └── Mistral Document AI (REST OCR via Azure APIM)
+              ↓
+         Side-by-side comparison, metrics & rendered markdown preview
+```
+
+## Project Structure
 
 ```
 benchmark_app/
-├── app.py                          # Main Streamlit application
-├── config.py                       # Configuration (env vars)
-├── requirements.txt                # Python dependencies
-├── .env.example                    # Environment template
-├── README.md                       # This file
+├── app.py                          # Streamlit UI & benchmark runner
+├── config.py                       # Env vars & model mappings
+├── prompts.py                      # Default LLM prompts
+├── requirements.txt
 ├── services/
-│   ├── content_understanding.py    # Azure Content Understanding API
-│   ├── doc_intel_gpt.py            # Doc Intelligence + GPT-5-chat Vision
-│   └── mistral_vision.py           # Mistral Doc AI (Azure-hosted OCR)
+│   ├── content_understanding.py    # Azure CU SDK + GPT-4.1 text summary
+│   ├── doc_intel_gpt.py            # Doc Intelligence SDK + GPT-4.1 text summary
+│   └── mistral_vision.py           # Mistral OCR via REST
 └── utils/
-    └── comparison.py               # Comparison tables & metrics
+    └── comparison.py               # Comparison tables & summary stats
 ```
-
-## 🔧 Configuration Details
-
-| Variable | Description |
-|----------|-------------|
-| `AZURE_CU_ENDPOINT` | Content Understanding cognitive services endpoint |
-| `AZURE_STORAGE_ACCOUNT` | Storage account for blob temp uploads |
-| `AZURE_STORAGE_CONTAINER` | Blob container name (default: `cu-temp`) |
-| `DOC_INTELLIGENCE_ENDPOINT` | Document Intelligence endpoint |
-| `DOC_INTELLIGENCE_KEY` | Document Intelligence API key |
-| `GPT_ENDPOINT` | Full GPT-5-chat completions URL (includes deployment + api-version) |
-| `GPT_KEY` | GPT API key |
-| `MISTRAL_DOC_AI_ENDPOINT` | Azure-hosted Mistral OCR endpoint |
-| `MISTRAL_DOC_AI_KEY` | Mistral Doc AI API key |
-| `MISTRAL_DOC_AI_MODEL` | Mistral model name (default: `mistral-document-ai-2505`) |

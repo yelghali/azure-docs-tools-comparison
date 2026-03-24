@@ -1,14 +1,12 @@
 """
-Azure Document Intelligence + GPT-5-chat Vision pipeline.
+Azure Document Intelligence + GPT-4.1 (Argus) pipeline.
 Step 1: Extract document with Doc Intelligence SDK.
-Step 2: Send image to GPT-5-chat Vision for a rich LLM summary.
-Auth: Doc Intelligence uses API key; GPT-5 uses DefaultAzureCredential
-      (key auth is disabled on the content-understanding resource).
+Step 2: Send extracted text to GPT-4.1 for a rich LLM summary.
+Auth: Uses DefaultAzureCredential or key-based auth via env vars.
 """
 
 import io
 import time
-import base64
 import requests
 from azure.identity import DefaultAzureCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -17,73 +15,72 @@ from config import (
     DOC_INTEL_ENDPOINT,
     DOC_INTEL_KEY,
     GPT_ENDPOINT,
+    GPT_KEY,
 )
 
 
 class DocIntelGPTService:
-    """Document Intelligence extraction + GPT-5-chat Vision description."""
+    """Document Intelligence extraction + GPT (Argus) Vision description."""
 
     def __init__(self):
-        self.di_client = DocumentIntelligenceClient(
-            endpoint=DOC_INTEL_ENDPOINT,
-            credential=AzureKeyCredential(DOC_INTEL_KEY),
-        )
-        # Entra ID auth for GPT-5 (key auth disabled on this resource)
+        # DefaultAzureCredential handles az login, managed identity, etc.
         self.credential = DefaultAzureCredential()
-        self._token = self.credential.get_token(
-            "https://cognitiveservices.azure.com/.default"
-        )
+        self._token = None
+
+        # Use API key if provided, otherwise use credential
+        if DOC_INTEL_KEY:
+            self.di_client = DocumentIntelligenceClient(
+                endpoint=DOC_INTEL_ENDPOINT,
+                credential=AzureKeyCredential(DOC_INTEL_KEY),
+            )
+        else:
+            self.di_client = DocumentIntelligenceClient(
+                endpoint=DOC_INTEL_ENDPOINT,
+                credential=self.credential,
+            )
 
     def _get_bearer_token(self) -> str:
-        if time.time() > self._token.expires_on - 120:
+        if self._token is None or time.time() > self._token.expires_on - 120:
             self._token = self.credential.get_token(
                 "https://cognitiveservices.azure.com/.default"
             )
         return self._token.token
 
-    # ── GPT-5-chat Vision call ──────────────────────────────────────────
-    def _gpt_describe(self, file_bytes: bytes, filename: str, mime: str) -> str:
-        b64 = base64.b64encode(file_bytes).decode("utf-8")
+    # ── GPT-4.1 text-based call ──────────────────────────────────────
+    def _gpt_describe(self, filename: str, extracted_text: str,
+                      system_prompt: str = None, user_prompt: str = None) -> str:
+        if not GPT_ENDPOINT:
+            return "(GPT-4.1 description skipped — GPT_ENDPOINT not configured)"
+
+        sys_content = system_prompt or (
+            "You are an expert document analysis assistant. "
+            "You analyse documents (invoices, quotes, purchase orders, etc.) "
+            "and provide a concise structured description."
+        )
+        user_text = (user_prompt or (
+            'Analyse this document "{filename}". '
+            "Provide: document type, issuer, recipient, total amount, "
+            "date, and any key information. Be concise (3-5 sentences)."
+        )).format(filename=filename)
+
+        user_content = user_text + f"\n\nExtracted document content:\n{extracted_text[:8000]}"
+
         body = {
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert document analysis assistant. "
-                        "You analyse scanned documents (invoices, quotes, purchase orders, etc.) "
-                        "and provide a concise structured description."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                f'Analyse this document image "{filename}". '
-                                "Provide: document type, issuer, recipient, total amount, "
-                                "date, and any key information. Be concise (3-5 sentences)."
-                            ),
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime};base64,{b64}",
-                                "detail": "high",
-                            },
-                        },
-                    ],
-                },
+                {"role": "system", "content": sys_content},
+                {"role": "user", "content": user_content},
             ],
-            "max_tokens": 400,
+            "max_tokens": 2000,
             "temperature": 0.3,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._get_bearer_token()}",
-        }
-        r = requests.post(GPT_ENDPOINT, headers=headers, json=body, timeout=120)
-        r.raise_for_status()
+        headers = {"Content-Type": "application/json"}
+        if GPT_KEY:
+            headers["api-key"] = GPT_KEY
+        else:
+            headers["Authorization"] = f"Bearer {self._get_bearer_token()}"
+        r = requests.post(GPT_ENDPOINT, headers=headers, json=body, timeout=180)
+        if not r.ok:
+            raise RuntimeError(f"GPT-4.1 HTTP {r.status_code}: {r.text[:500]}")
         return r.json()["choices"][0]["message"]["content"].strip()
 
     # ── Public API ──────────────────────────────────────────────────────
@@ -93,13 +90,19 @@ class DocIntelGPTService:
         filename: str,
         model_id: str = "prebuilt-invoice",
         mime: str = "image/jpeg",
+        prompts: dict = None,
     ) -> dict:
         """
-        Run Doc Intelligence + GPT-5 Vision on a document.
+        Run Doc Intelligence + GPT Vision on a document.
+        
+        Args:
+            prompts: Optional dict with 'gpt_system' and 'gpt_user' keys for custom prompts
+        
         Returns a result dict similar to Content Understanding's output.
         """
         t0 = time.time()
         errors = []
+        prompts = prompts or {}
 
         # ── Step 1: Document Intelligence ───────────────────────────────
         di_result = {}
@@ -152,12 +155,16 @@ class DocIntelGPTService:
         except Exception as e:
             errors.append(f"DocIntel: {e}")
 
-        # ── Step 2: GPT-5-chat Vision ───────────────────────────────────
+        # ── Step 2: GPT-4.1 Summary ─────────────────────────────────────
         gpt_description = ""
         try:
-            gpt_description = self._gpt_describe(file_bytes, filename, mime)
+            gpt_description = self._gpt_describe(
+                filename, di_markdown,
+                system_prompt=prompts.get("gpt_system"),
+                user_prompt=prompts.get("gpt_user"),
+            )
         except Exception as e:
-            errors.append(f"GPT Vision: {e}")
+            errors.append(f"GPT-4.1: {e}")
 
         dt = round(time.time() - t0, 2)
         return {

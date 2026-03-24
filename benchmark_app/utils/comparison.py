@@ -19,6 +19,7 @@ def build_comparison_table(results: dict) -> list[dict]:
     for pipeline_name, res in results.items():
         if res is None:
             continue
+        conf = res.get("avg_confidence")
         row = {
             "Pipeline": pipeline_name,
             "Status": res.get("status", "N/A"),
@@ -26,7 +27,7 @@ def build_comparison_table(results: dict) -> list[dict]:
             "Fields Extracted": res.get("fields_with_values", 0),
             "Total Fields": res.get("field_count", 0),
             "Tables Detected": res.get("tables_count", 0),
-            "Avg Confidence": res.get("avg_confidence", "N/A"),
+            "Avg Confidence": f"{conf:.2%}" if isinstance(conf, (int, float)) else "N/A",
             "Markdown Length": len(res.get("markdown", "")),
         }
         rows.append(row)

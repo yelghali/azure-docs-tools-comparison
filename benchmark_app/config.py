@@ -16,6 +16,7 @@ CU_API_VERSION = os.getenv("AZURE_CU_API_VERSION", "2025-11-01")
 # ─── Azure Blob Storage (used by Content Understanding for URL-based input) ──
 STORAGE_ACCOUNT = os.getenv("AZURE_STORAGE_ACCOUNT", "")
 STORAGE_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER", "cu-temp")
+STORAGE_KEY = os.getenv("AZURE_STORAGE_KEY", "")  # optional, falls back to DefaultAzureCredential
 
 # ─── Azure Document Intelligence ───────────────────────────────────────
 DOC_INTEL_ENDPOINT = os.getenv("DOC_INTELLIGENCE_ENDPOINT", "")
@@ -36,14 +37,12 @@ MISTRAL_DOC_AI_MODEL = os.getenv("MISTRAL_DOC_AI_MODEL", "mistral-document-ai-25
 
 # ─── Prebuilt Analyzers available in Content Understanding ─────────────
 PREBUILT_ANALYZERS = {
-    "prebuilt-invoice": "🧾 Invoice — Extracts structured fields from invoices",
     "prebuilt-layout": "📐 Layout — Extracts tables, figures, and document structure",
     "prebuilt-read": "📖 Read — OCR for printed and handwritten text",
 }
 
 # ─── Document Intelligence prebuilt models ─────────────────────────────
 DOC_INTEL_MODELS = {
-    "prebuilt-invoice": "prebuilt-invoice",
     "prebuilt-layout": "prebuilt-layout",
     "prebuilt-read": "prebuilt-read",
 }
