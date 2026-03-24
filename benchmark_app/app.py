@@ -462,7 +462,9 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                 if raw:
                     with st.expander("🔬 Raw API Result (paragraphs, polygons, tables…)", expanded=False):
                         try:
-                            st.json(raw)
+                            # Convert to JSON string first to avoid st.json serialization issues
+                            raw_json_str = json.dumps(raw, indent=2, default=str)
+                            st.json(raw_json_str)
                         except Exception:
                             st.code(json.dumps(raw, indent=2, default=str)[:10000], language="json")
 

@@ -217,13 +217,16 @@ class ContentUnderstandingService:
         # Try SDK's built-in serialization first
         if hasattr(obj, 'as_dict'):
             try:
-                return json.loads(json.dumps(obj.as_dict(), default=str))
+                d = obj.as_dict()
+                return json.loads(json.dumps(d, default=str))
             except Exception:
                 pass
         # Fallback: force through JSON round-trip
         try:
-            return json.loads(json.dumps(obj, default=str))
+            serialized = json.loads(json.dumps(obj, default=str))
+            # Ensure we always return a dict/list, not a bare string
+            if isinstance(serialized, (dict, list)):
+                return serialized
+            return {"_raw": serialized}
         except Exception:
             return {"_raw": str(obj)[:5000]}
-        except (TypeError, ValueError):
-            return str(obj)
