@@ -209,19 +209,12 @@ class ContentUnderstandingService:
 
     @staticmethod
     def _to_serializable(obj):
-        """Deep-convert SDK result objects to plain JSON-serializable dicts/lists."""
-        if isinstance(obj, dict):
-            return {k: ContentUnderstandingService._to_serializable(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [ContentUnderstandingService._to_serializable(v) for v in obj]
-        if hasattr(obj, "items"):
-            # dict-like SDK object
-            return {k: ContentUnderstandingService._to_serializable(v) for k, v in obj.items()}
-        if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
-            return [ContentUnderstandingService._to_serializable(v) for v in obj]
-        # Try JSON round-trip for remaining SDK types
+        """Convert SDK result to a plain JSON-serializable dict."""
+        if hasattr(obj, "as_dict"):
+            return obj.as_dict()
         try:
-            json.dumps(obj)
-            return obj
+            return json.loads(json.dumps(obj, default=str))
+        except (TypeError, ValueError):
+            return {"_raw_str": str(obj)}
         except (TypeError, ValueError):
             return str(obj)

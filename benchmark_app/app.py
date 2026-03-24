@@ -449,7 +449,7 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                         with raw_tab:
                             st.code(md[:5000], language="markdown")
                         with rendered_tab:
-                            st.markdown(md[:5000])
+                            st.markdown(md[:5000], unsafe_allow_html=True)
 
                 # Raw fields
                 fields = res.get("fields", {})
