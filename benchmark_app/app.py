@@ -347,25 +347,49 @@ if st.button("🚀  Run Benchmark", type="primary", use_container_width=True):
                 short_label = model_id.replace("prebuilt-", "").capitalize()
                 suffix = f" [{short_label}]" if multi_model else ""
                 if run_cu:
-                    svc = get_cu_service()
-                    futures[
-                        executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
-                                        prompts["cu_system"], prompts["cu_user"],
-                                        gpt_endpoint)
-                    ] = f"🔵 Content Understanding{suffix}"
+                    pipeline_label = f"🔵 Content Understanding{suffix}"
+                    try:
+                        svc = get_cu_service()
+                        futures[
+                            executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
+                                            prompts["cu_system"], prompts["cu_user"],
+                                            gpt_endpoint)
+                        ] = pipeline_label
+                    except Exception as e:
+                        results[pipeline_label] = {
+                            "status": "error",
+                            "error": f"Service init failed: {e}",
+                            "time_seconds": 0,
+                        }
                 if run_di:
-                    svc = get_di_service()
-                    futures[
-                        executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
-                                        {"gpt_system": prompts["gpt_system"], "gpt_user": prompts["gpt_user"]},
-                                        gpt_endpoint)
-                    ] = f"🟢 DocIntel + {llm_label}{suffix}"
+                    pipeline_label = f"🟢 DocIntel + {llm_label}{suffix}"
+                    try:
+                        svc = get_di_service()
+                        futures[
+                            executor.submit(svc.analyze, file_bytes, filename, model_id, mime,
+                                            {"gpt_system": prompts["gpt_system"], "gpt_user": prompts["gpt_user"]},
+                                            gpt_endpoint)
+                        ] = pipeline_label
+                    except Exception as e:
+                        results[pipeline_label] = {
+                            "status": "error",
+                            "error": f"Service init failed: {e}",
+                            "time_seconds": 0,
+                        }
             if run_mi:
-                svc = get_mi_service()
-                futures[
-                    executor.submit(svc.analyze, file_bytes, filename, mime,
-                                    {"mistral_system": prompts["mistral_system"], "mistral_user": prompts["mistral_user"]})
-                ] = "🟠 Mistral Document AI"
+                pipeline_label = "🟠 Mistral Document AI"
+                try:
+                    svc = get_mi_service()
+                    futures[
+                        executor.submit(svc.analyze, file_bytes, filename, mime,
+                                        {"mistral_system": prompts["mistral_system"], "mistral_user": prompts["mistral_user"]})
+                    ] = pipeline_label
+                except Exception as e:
+                    results[pipeline_label] = {
+                        "status": "error",
+                        "error": f"Service init failed: {e}",
+                        "time_seconds": 0,
+                    }
 
             with results_col:
                 status_placeholder = st.empty()
